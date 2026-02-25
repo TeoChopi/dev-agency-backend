@@ -1,34 +1,69 @@
 import { IProductsRepository } from '../repositories/products.repository';
 import { Product, ProductQuery, CreateProduct, UpdateProduct } from '../models/products.schemas';
 import { PaginatedResult, PaginationOptions } from '../models/common.types';
-import { calculatePaginationOptions, validatePaginationParams } from '../utils/pagination';
+import { calculatePaginationOptions, validatePaginationParams, generatePaginationCacheKey } from '../utils/pagination';
 import { logger } from '../utils/logger';
 import { ApiError } from '../utils/errors';
+import { RedisService } from '../utils/redis';
 
 /**
  * Products service interface
  */
 export interface IProductsService {
-  getProducts(query: ProductQuery): Promise<PaginatedResult<Product>>;
-  getProductById(id: string): Promise<Product>;
-  createProduct(data: CreateProduct): Promise<Product>;
-  updateProduct(id: string, data: UpdateProduct): Promise<Product>;
-  deleteProduct(id: string): Promise<void>;
+  getProducts(query: ProductQuery, requestId?: string): Promise<PaginatedResult<Product>>;
+  getProductById(id: string, requestId?: string): Promise<Product>;
+  createProduct(data: CreateProduct, requestId?: string): Promise<Product>;
+  updateProduct(id: string, data: UpdateProduct, requestId?: string): Promise<Product>;
+  deleteProduct(id: string, requestId?: string): Promise<void>;
 }
 
 /**
- * Products service implementation
+ * Products service implementation with caching support
  */
 export class ProductsService implements IProductsService {
-  constructor(private readonly productsRepository: IProductsRepository) {}
+  private readonly cacheService: RedisService;
+  private readonly cacheTTL = 300; // 5 minutes cache
+
+  constructor(
+    private readonly productsRepository: IProductsRepository,
+    cacheService?: RedisService
+  ) {
+    this.cacheService = cacheService || new RedisService();
+  }
 
   /**
-   * Get paginated products with filters
+   * Get paginated products with filters and caching
    */
-  async getProducts(query: ProductQuery): Promise<PaginatedResult<Product>> {
+  async getProducts(query: ProductQuery, requestId?: string): Promise<PaginatedResult<Product>> {
+    const logContext = { requestId, query };
+    
     try {
       // Validate pagination parameters
       validatePaginationParams(query.page, query.limit);
+
+      // Check cache for frequently accessed pages
+      const cacheKey = generatePaginationCacheKey('products', query.page, query.limit, {
+        search: query.search,
+        category: query.category,
+        minPrice: query.minPrice,
+        maxPrice: query.maxPrice,
+        isActive: query.isActive,
+        sortBy: query.sortBy,
+        sortOrder: query.sortOrder,
+      });
+
+      try {
+        const cachedResult = await this.cacheService.get<PaginatedResult<Product>>(cacheKey);
+        if (cachedResult) {
+          logger.info('Retrieved products from cache', { ...logContext, cacheKey });
+          return cachedResult;
+        }
+      } catch (cacheError) {
+        logger.warn('Cache retrieval failed, continuing with database query', { 
+          ...logContext, 
+          cacheError: cacheError instanceof Error ? cacheError.message : 'Unknown cache error' 
+        });
+      }
 
       // Calculate pagination options
       const paginationOptions = calculatePaginationOptions(query);
@@ -45,19 +80,30 @@ export class ProductsService implements IProductsService {
       // Get paginated results
       const result = await this.productsRepository.findMany(paginationOptions, filters);
 
+      // Cache the result for frequently accessed pages (first 10 pages)
+      if (query.page <= 10) {
+        try {
+          await this.cacheService.set(cacheKey, result, this.cacheTTL);
+        } catch (cacheError) {
+          logger.warn('Failed to cache result', { 
+            ...logContext, 
+            cacheError: cacheError instanceof Error ? cacheError.message : 'Unknown cache error' 
+          });
+        }
+      }
+
       logger.info('Retrieved products successfully', {
-        page: query.page,
-        limit: query.limit,
+        ...logContext,
         total: result.total,
         itemsCount: result.items.length,
       });
 
       return result;
     } catch (error) {
-      logger.error('Failed to get products', { error, query });
+      logger.error('Failed to get products', { ...logContext, error });
       
-      if (error instanceof Error && error.message.includes('Page must be') || error.message.includes('Limit must be')) {
-        throw new ApiError(error.message, 400, 'INVALID_PAGINATION_PARAMS');
+      if (error instanceof ApiError) {
+        throw error;
       }
       
       throw new ApiError('Failed to retrieve products', 500, 'PRODUCTS_FETCH_ERROR');
@@ -67,7 +113,9 @@ export class ProductsService implements IProductsService {
   /**
    * Get product by ID
    */
-  async getProductById(id: string): Promise<Product> {
+  async getProductById(id: string, requestId?: string): Promise<Product> {
+    const logContext = { requestId, productId: id };
+    
     try {
       if (!id) {
         throw new ApiError('Product ID is required', 400, 'INVALID_PRODUCT_ID');
@@ -79,10 +127,10 @@ export class ProductsService implements IProductsService {
         throw new ApiError('Product not found', 404, 'PRODUCT_NOT_FOUND');
       }
 
-      logger.info('Retrieved product by ID', { productId: id });
+      logger.info('Retrieved product by ID', logContext);
       return product;
     } catch (error) {
-      logger.error('Failed to get product by ID', { error, id });
+      logger.error('Failed to get product by ID', { ...logContext, error });
       
       if (error instanceof ApiError) {
         throw error;
@@ -95,17 +143,22 @@ export class ProductsService implements IProductsService {
   /**
    * Create new product
    */
-  async createProduct(data: CreateProduct): Promise<Product> {
+  async createProduct(data: CreateProduct, requestId?: string): Promise<Product> {
+    const logContext = { requestId, productData: data };
+    
     try {
       // Validate business rules
       await this.validateProductData(data);
 
       const product = await this.productsRepository.create(data);
 
-      logger.info('Created product successfully', { productId: product.id });
+      // Invalidate cache after creation
+      await this.invalidateProductsCache();
+
+      logger.info('Created product successfully', { ...logContext, productId: product.id });
       return product;
     } catch (error) {
-      logger.error('Failed to create product', { error, data });
+      logger.error('Failed to create product', { ...logContext, error });
       
       if (error instanceof ApiError) {
         throw error;
@@ -118,7 +171,9 @@ export class ProductsService implements IProductsService {
   /**
    * Update product by ID
    */
-  async updateProduct(id: string, data: UpdateProduct): Promise<Product> {
+  async updateProduct(id: string, data: UpdateProduct, requestId?: string): Promise<Product> {
+    const logContext = { requestId, productId: id, updateData: data };
+    
     try {
       if (!id) {
         throw new ApiError('Product ID is required', 400, 'INVALID_PRODUCT_ID');
@@ -135,10 +190,13 @@ export class ProductsService implements IProductsService {
         throw new ApiError('Product not found', 404, 'PRODUCT_NOT_FOUND');
       }
 
-      logger.info('Updated product successfully', { productId: id });
+      // Invalidate cache after update
+      await this.invalidateProductsCache();
+
+      logger.info('Updated product successfully', logContext);
       return product;
     } catch (error) {
-      logger.error('Failed to update product', { error, id, data });
+      logger.error('Failed to update product', { ...logContext, error });
       
       if (error instanceof ApiError) {
         throw error;
@@ -151,7 +209,9 @@ export class ProductsService implements IProductsService {
   /**
    * Delete product by ID
    */
-  async deleteProduct(id: string): Promise<void> {
+  async deleteProduct(id: string, requestId?: string): Promise<void> {
+    const logContext = { requestId, productId: id };
+    
     try {
       if (!id) {
         throw new ApiError('Product ID is required', 400, 'INVALID_PRODUCT_ID');
@@ -163,9 +223,12 @@ export class ProductsService implements IProductsService {
         throw new ApiError('Product not found', 404, 'PRODUCT_NOT_FOUND');
       }
 
-      logger.info('Deleted product successfully', { productId: id });
+      // Invalidate cache after deletion
+      await this.invalidateProductsCache();
+
+      logger.info('Deleted product successfully', logContext);
     } catch (error) {
-      logger.error('Failed to delete product', { error, id });
+      logger.error('Failed to delete product', { ...logContext, error });
       
       if (error instanceof ApiError) {
         throw error;
@@ -194,6 +257,17 @@ export class ProductsService implements IProductsService {
 
     if (data.category && data.category.trim().length === 0) {
       throw new ApiError('Product category cannot be empty', 400, 'INVALID_CATEGORY');
+    }
+  }
+
+  /**
+   * Invalidate products cache
+   */
+  private async invalidateProductsCache(): Promise<void> {
+    try {
+      await this.cacheService.deleteByPattern('products:page:*');
+    } catch (error) {
+      logger.warn('Failed to invalidate products cache', { error });
     }
   }
 }
