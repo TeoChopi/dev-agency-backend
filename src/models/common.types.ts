@@ -54,3 +54,13 @@ export interface PaginatedResult<T> {
   items: T[];
   total: number;
 }
+
+/**
+ * Request metadata for tracking
+ */
+export interface RequestMeta {
+  requestId: string;
+  timestamp: Date;
+  userAgent?: string;
+  ip?: string;
+}
