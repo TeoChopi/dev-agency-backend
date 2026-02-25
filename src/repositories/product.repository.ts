@@ -1,137 +1,171 @@
-import { PrismaClient, Product, Prisma } from '@prisma/client';
-import { CreateProductInput, UpdateProductInput, ProductQuery, PaginatedProducts } from '@/models/product.model';
-import { logger } from '@/utils/logger';
+import { Product } from '@prisma/client';
+import { prisma } from '../config/database';
+import { ProductsQuery } from '../models/product.model';
+import { createLogger } from '../utils/logger';
 
+const logger = createLogger({ module: 'ProductRepository' });
+
+/**
+ * Product repository interface
+ */
 export interface IProductRepository {
-  create(data: CreateProductInput): Promise<Product>;
-  findById(id: number): Promise<Product | null>;
-  findAll(query: ProductQuery): Promise<PaginatedProducts>;
-  update(id: number, data: UpdateProductInput): Promise<Product>;
-  delete(id: number): Promise<void>;
-  exists(id: number): Promise<boolean>;
+  findMany(query: ProductsQuery): Promise<{ products: Product[]; total: number }>;
+  findById(id: string): Promise<Product | null>;
+  create(data: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>): Promise<Product>;
+  update(id: string, data: Partial<Product>): Promise<Product>;
+  delete(id: string): Promise<void>;
 }
 
+/**
+ * Prisma implementation of Product repository
+ */
 export class ProductRepository implements IProductRepository {
-  constructor(private readonly prisma: PrismaClient) {}
+  /**
+   * Find products with filtering and pagination
+   */
+  async findMany(query: ProductsQuery): Promise<{ products: Product[]; total: number }> {
+    const { page, limit, category, minPrice, maxPrice, search } = query;
+    
+    logger.debug('Finding products with query', { query });
 
-  async create(data: CreateProductInput): Promise<Product> {
-    try {
-      const product = await this.prisma.product.create({
-        data,
-      });
-
-      logger.info({ productId: product.id }, 'Product created successfully');
-      return product;
-    } catch (error) {
-      logger.error(error, 'Failed to create product');
-      throw error;
-    }
-  }
-
-  async findById(id: number): Promise<Product | null> {
-    try {
-      const product = await this.prisma.product.findUnique({
-        where: { id },
-      });
-
-      return product;
-    } catch (error) {
-      logger.error({ productId: id, error }, 'Failed to find product by ID');
-      throw error;
-    }
-  }
-
-  async findAll(query: ProductQuery): Promise<PaginatedProducts> {
-    try {
-      const {
-        page = 1,
-        limit = 10,
-        category,
-        search,
-        sort = 'createdAt',
-        order = 'desc',
-      } = query;
-
-      const skip = (page - 1) * limit;
-
-      const where: Prisma.ProductWhereInput = {
-        ...(category && { category }),
-        ...(search && {
-          OR: [
-            { name: { contains: search, mode: 'insensitive' } },
-            { category: { contains: search, mode: 'insensitive' } },
-          ],
-        }),
+    // Build where clause
+    const where: any = {};
+    
+    if (category) {
+      where.category = {
+        equals: category,
+        mode: 'insensitive',
       };
+    }
 
-      const orderBy: Prisma.ProductOrderByWithRelationInput = {
-        [sort]: order,
-      };
+    if (minPrice !== undefined || maxPrice !== undefined) {
+      where.price = {};
+      if (minPrice !== undefined) {
+        where.price.gte = minPrice;
+      }
+      if (maxPrice !== undefined) {
+        where.price.lte = maxPrice;
+      }
+    }
 
+    if (search) {
+      where.OR = [
+        {
+          name: {
+            contains: search,
+            mode: 'insensitive',
+          },
+        },
+        {
+          category: {
+            contains: search,
+            mode: 'insensitive',
+          },
+        },
+      ];
+    }
+
+    // Calculate pagination
+    const skip = (page - 1) * limit;
+
+    try {
       const [products, total] = await Promise.all([
-        this.prisma.product.findMany({
+        prisma.product.findMany({
           where,
-          orderBy,
           skip,
           take: limit,
+          orderBy: [
+            { createdAt: 'desc' },
+            { id: 'asc' }, // Secondary sort for consistent pagination
+          ],
         }),
-        this.prisma.product.count({ where }),
+        prisma.product.count({ where }),
       ]);
 
-      const totalPages = Math.ceil(total / limit);
+      logger.debug('Found products', { count: products.length, total });
 
-      return {
-        products,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages,
-        },
-      };
+      return { products, total };
     } catch (error) {
-      logger.error({ query, error }, 'Failed to find products');
+      logger.error('Error finding products', error);
       throw error;
     }
   }
 
-  async update(id: number, data: UpdateProductInput): Promise<Product> {
+  /**
+   * Find product by ID
+   */
+  async findById(id: string): Promise<Product | null> {
+    logger.debug('Finding product by ID', { id });
+
     try {
-      const product = await this.prisma.product.update({
+      const product = await prisma.product.findUnique({
+        where: { id },
+      });
+
+      logger.debug('Product found', { found: !!product, id });
+
+      return product;
+    } catch (error) {
+      logger.error('Error finding product by ID', { error, id });
+      throw error;
+    }
+  }
+
+  /**
+   * Create new product
+   */
+  async create(data: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>): Promise<Product> {
+    logger.debug('Creating product', { name: data.name });
+
+    try {
+      const product = await prisma.product.create({
+        data,
+      });
+
+      logger.info('Product created', { id: product.id, name: product.name });
+
+      return product;
+    } catch (error) {
+      logger.error('Error creating product', { error, data });
+      throw error;
+    }
+  }
+
+  /**
+   * Update product
+   */
+  async update(id: string, data: Partial<Product>): Promise<Product> {
+    logger.debug('Updating product', { id, fields: Object.keys(data) });
+
+    try {
+      const product = await prisma.product.update({
         where: { id },
         data,
       });
 
-      logger.info({ productId: id }, 'Product updated successfully');
+      logger.info('Product updated', { id: product.id, name: product.name });
+
       return product;
     } catch (error) {
-      logger.error({ productId: id, error }, 'Failed to update product');
+      logger.error('Error updating product', { error, id, data });
       throw error;
     }
   }
 
-  async delete(id: number): Promise<void> {
+  /**
+   * Delete product
+   */
+  async delete(id: string): Promise<void> {
+    logger.debug('Deleting product', { id });
+
     try {
-      await this.prisma.product.delete({
+      await prisma.product.delete({
         where: { id },
       });
 
-      logger.info({ productId: id }, 'Product deleted successfully');
+      logger.info('Product deleted', { id });
     } catch (error) {
-      logger.error({ productId: id, error }, 'Failed to delete product');
-      throw error;
-    }
-  }
-
-  async exists(id: number): Promise<boolean> {
-    try {
-      const count = await this.prisma.product.count({
-        where: { id },
-      });
-
-      return count > 0;
-    } catch (error) {
-      logger.error({ productId: id, error }, 'Failed to check if product exists');
+      logger.error('Error deleting product', { error, id });
       throw error;
     }
   }
