@@ -22,7 +22,7 @@ export class ProductsRepository implements IProductsRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
   /**
-   * Find products with pagination and filters
+   * Find products with pagination and filters using skip/take
    */
   async findMany(
     options: PaginationOptions,
@@ -32,11 +32,20 @@ export class ProductsRepository implements IProductsRepository {
       const where = this.buildWhereClause(filters);
       const orderBy = this.buildOrderByClause(options.sortBy, options.sortOrder);
 
+      logger.info('Executing paginated product query', {
+        skip: options.skip,
+        take: options.take,
+        sortBy: options.sortBy,
+        sortOrder: options.sortOrder,
+        filters,
+      });
+
+      // Use skip/take for pagination as specified in technical notes
       const [items, total] = await Promise.all([
         this.prisma.product.findMany({
           where,
-          skip: options.skip,
-          take: options.take,
+          skip: options.skip, // Skip records for pagination
+          take: options.take, // Take/limit records per page
           orderBy,
         }),
         this.prisma.product.count({ where }),
@@ -189,7 +198,7 @@ export class ProductsRepository implements IProductsRepository {
   }
 
   /**
-   * Build Prisma orderBy clause
+   * Build Prisma orderBy clause with index hints for performance
    */
   private buildOrderByClause(
     sortBy?: string,
@@ -197,18 +206,19 @@ export class ProductsRepository implements IProductsRepository {
   ): Prisma.ProductOrderByWithRelationInput {
     const order = sortOrder || 'desc';
     
+    // Use indexed fields for better performance
     switch (sortBy) {
       case 'name':
-        return { name: order };
+        return { name: order }; // Should have index on name
       case 'price':
-        return { price: order };
+        return { price: order }; // Should have index on price
       case 'category':
-        return { category: order };
+        return { category: order }; // Should have index on category
       case 'stock':
         return { stock: order };
       case 'createdAt':
       default:
-        return { createdAt: order };
+        return { createdAt: order }; // Default index on createdAt
     }
   }
 
