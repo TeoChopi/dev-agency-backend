@@ -5,6 +5,7 @@ import { PaginatedResponse } from '../models/common.types';
 import { createPaginationMeta } from '../utils/pagination';
 import { logger } from '../utils/logger';
 import { ApiError } from '../utils/errors';
+import { generateRequestId } from '../utils/request';
 
 /**
  * Products controller handling HTTP requests
@@ -17,6 +18,8 @@ export class ProductsController {
    * GET /api/products
    */
   getProducts = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const requestId = generateRequestId();
+    
     try {
       // Validate query parameters
       const queryResult = ProductQuerySchema.safeParse(req.query);
@@ -32,7 +35,7 @@ export class ProductsController {
       const query = queryResult.data;
 
       // Get paginated products
-      const result = await this.productsService.getProducts(query);
+      const result = await this.productsService.getProducts(query, requestId);
 
       // Create pagination metadata
       const pagination = createPaginationMeta(
@@ -49,14 +52,18 @@ export class ProductsController {
       };
 
       logger.info('Products retrieved successfully', {
+        requestId,
         page: query.page,
         limit: query.limit,
         total: result.total,
         itemsReturned: result.items.length,
+        userAgent: req.get('User-Agent'),
+        ip: req.ip,
       });
 
       res.status(200).json(response);
     } catch (error) {
+      logger.error('Products retrieval failed', { requestId, error });
       next(error);
     }
   };
@@ -66,6 +73,8 @@ export class ProductsController {
    * GET /api/products/:id
    */
   getProductById = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const requestId = generateRequestId();
+    
     try {
       const { id } = req.params;
 
@@ -73,13 +82,14 @@ export class ProductsController {
         throw new ApiError('Product ID is required', 400, 'INVALID_PRODUCT_ID');
       }
 
-      const product = await this.productsService.getProductById(id);
+      const product = await this.productsService.getProductById(id, requestId);
 
       res.status(200).json({
         success: true,
         data: product,
       });
     } catch (error) {
+      logger.error('Product retrieval by ID failed', { requestId, productId: req.params.id, error });
       next(error);
     }
   };
@@ -89,6 +99,8 @@ export class ProductsController {
    * POST /api/products
    */
   createProduct = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const requestId = generateRequestId();
+    
     try {
       // Validate request body
       const bodyResult = CreateProductSchema.safeParse(req.body);
@@ -104,15 +116,16 @@ export class ProductsController {
       const productData = bodyResult.data;
 
       // Create product
-      const product = await this.productsService.createProduct(productData);
+      const product = await this.productsService.createProduct(productData, requestId);
 
-      logger.info('Product created successfully', { productId: product.id });
+      logger.info('Product created successfully', { requestId, productId: product.id });
 
       res.status(201).json({
         success: true,
         data: product,
       });
     } catch (error) {
+      logger.error('Product creation failed', { requestId, productData: req.body, error });
       next(error);
     }
   };
@@ -122,6 +135,8 @@ export class ProductsController {
    * PUT /api/products/:id
    */
   updateProduct = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const requestId = generateRequestId();
+    
     try {
       const { id } = req.params;
 
@@ -143,15 +158,16 @@ export class ProductsController {
       const updateData = bodyResult.data;
 
       // Update product
-      const product = await this.productsService.updateProduct(id, updateData);
+      const product = await this.productsService.updateProduct(id, updateData, requestId);
 
-      logger.info('Product updated successfully', { productId: id });
+      logger.info('Product updated successfully', { requestId, productId: id });
 
       res.status(200).json({
         success: true,
         data: product,
       });
     } catch (error) {
+      logger.error('Product update failed', { requestId, productId: req.params.id, updateData: req.body, error });
       next(error);
     }
   };
@@ -161,6 +177,8 @@ export class ProductsController {
    * DELETE /api/products/:id
    */
   deleteProduct = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const requestId = generateRequestId();
+    
     try {
       const { id } = req.params;
 
@@ -169,12 +187,13 @@ export class ProductsController {
       }
 
       // Delete product
-      await this.productsService.deleteProduct(id);
+      await this.productsService.deleteProduct(id, requestId);
 
-      logger.info('Product deleted successfully', { productId: id });
+      logger.info('Product deleted successfully', { requestId, productId: id });
 
       res.status(204).send();
     } catch (error) {
+      logger.error('Product deletion failed', { requestId, productId: req.params.id, error });
       next(error);
     }
   };
