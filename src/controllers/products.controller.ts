@@ -6,6 +6,18 @@ import { createPaginationMeta } from '../utils/pagination';
 import { logger } from '../utils/logger';
 import { ApiError } from '../utils/errors';
 import { generateRequestId } from '../utils/request';
+import rateLimit from 'express-rate-limit';
+
+/**
+ * Rate limiting for pagination endpoints
+ */
+export const paginationRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 1000, // Limit each IP to 1000 requests per windowMs
+  message: 'Too many pagination requests from this IP, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 /**
  * Products controller handling HTTP requests
