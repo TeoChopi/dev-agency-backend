@@ -1,62 +1,97 @@
 import { z } from 'zod';
 
-export const CreateProductSchema = z.object({
-  name: z.string()
-    .min(1, 'Name is required')
-    .max(255, 'Name must be less than 255 characters'),
-  price: z.number()
-    .positive('Price must be positive')
-    .max(999999.99, 'Price cannot exceed 999,999.99'),
-  category: z.string()
-    .min(1, 'Category is required')
-    .max(100, 'Category must be less than 100 characters'),
-  image_url: z.string()
-    .url('Must be a valid URL')
-    .optional(),
+/**
+ * Product validation schema
+ */
+export const ProductSchema = z.object({
+  id: z.string().cuid(),
+  name: z.string().min(1).max(255),
+  price: z.number().positive().multipleOf(0.01),
+  category: z.string().min(1).max(100),
+  imageUrl: z.string().url().nullable(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
 });
 
+/**
+ * Product creation schema (without generated fields)
+ */
+export const CreateProductSchema = ProductSchema.omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+/**
+ * Product update schema (all fields optional)
+ */
 export const UpdateProductSchema = CreateProductSchema.partial();
 
-export const ProductParamsSchema = z.object({
-  id: z.string().transform((val) => parseInt(val, 10)).pipe(
-    z.number().int().positive('ID must be a positive integer')
-  ),
+/**
+ * Pagination query parameters schema
+ */
+export const PaginationQuerySchema = z.object({
+  page: z.string().optional().transform((val) => {
+    if (!val) return 1;
+    const parsed = parseInt(val, 10);
+    return isNaN(parsed) || parsed < 1 ? 1 : parsed;
+  }),
+  limit: z.string().optional().transform((val) => {
+    if (!val) return 20;
+    const parsed = parseInt(val, 10);
+    if (isNaN(parsed) || parsed < 1) return 20;
+    return Math.min(parsed, 100); // Cap at 100
+  }),
 });
 
-export const ProductQuerySchema = z.object({
-  page: z.string().transform((val) => parseInt(val, 10)).pipe(
-    z.number().int().positive().default(1)
-  ).optional(),
-  limit: z.string().transform((val) => parseInt(val, 10)).pipe(
-    z.number().int().positive().max(100).default(10)
-  ).optional(),
+/**
+ * Products query parameters schema
+ */
+export const ProductsQuerySchema = PaginationQuerySchema.extend({
   category: z.string().optional(),
+  minPrice: z.string().optional().transform((val) => {
+    if (!val) return undefined;
+    const parsed = parseFloat(val);
+    return isNaN(parsed) ? undefined : parsed;
+  }),
+  maxPrice: z.string().optional().transform((val) => {
+    if (!val) return undefined;
+    const parsed = parseFloat(val);
+    return isNaN(parsed) ? undefined : parsed;
+  }),
   search: z.string().optional(),
-  sort: z.enum(['name', 'price', 'category', 'createdAt']).default('createdAt').optional(),
-  order: z.enum(['asc', 'desc']).default('desc').optional(),
 });
 
-export type CreateProductInput = z.infer<typeof CreateProductSchema>;
-export type UpdateProductInput = z.infer<typeof UpdateProductSchema>;
-export type ProductParams = z.infer<typeof ProductParamsSchema>;
-export type ProductQuery = z.infer<typeof ProductQuerySchema>;
+/**
+ * TypeScript types inferred from Zod schemas
+ */
+export type Product = z.infer<typeof ProductSchema>;
+export type CreateProduct = z.infer<typeof CreateProductSchema>;
+export type UpdateProduct = z.infer<typeof UpdateProductSchema>;
+export type PaginationQuery = z.infer<typeof PaginationQuerySchema>;
+export type ProductsQuery = z.infer<typeof ProductsQuerySchema>;
 
-export interface Product {
-  id: number;
-  name: string;
-  price: number;
-  category: string;
-  image_url: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export interface PaginatedProducts {
-  products: Product[];
+/**
+ * API response types
+ */
+export interface PaginatedResponse<T> {
+  success: boolean;
+  data: T[];
   pagination: {
     page: number;
     limit: number;
     total: number;
-    totalPages: number;
+    pages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+}
+
+export interface ApiResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: {
+    message: string;
+    code: string;
   };
 }
