@@ -1,98 +1,89 @@
 import { PrismaClient } from '@prisma/client';
-import { logger } from '@/utils/logger';
+import { logger } from '../utils/logger';
 
-class DatabaseService {
-  private static instance: DatabaseService;
-  private prisma: PrismaClient;
+/**
+ * Prisma client configuration with logging and error handling
+ */
+export const prisma = new PrismaClient({
+  log: [
+    {
+      emit: 'event',
+      level: 'query',
+    },
+    {
+      emit: 'event',
+      level: 'error',
+    },
+    {
+      emit: 'event',
+      level: 'info',
+    },
+    {
+      emit: 'event',
+      level: 'warn',
+    },
+  ],
+});
 
-  private constructor() {
-    this.prisma = new PrismaClient({
-      log: [
-        {
-          emit: 'event',
-          level: 'query',
-        },
-        {
-          emit: 'event',
-          level: 'error',
-        },
-        {
-          emit: 'event',
-          level: 'warn',
-        },
-        {
-          emit: 'event',
-          level: 'info',
-        },
-      ],
+// Log database queries in development
+if (process.env.NODE_ENV === 'development') {
+  prisma.$on('query', (e) => {
+    logger.debug('Database Query', {
+      query: e.query,
+      params: e.params,
+      duration: e.duration,
     });
+  });
+}
 
-    this.setupEventListeners();
-  }
+// Log database errors
+prisma.$on('error', (e) => {
+  logger.error('Database Error', {
+    target: e.target,
+    timestamp: e.timestamp,
+  });
+});
 
-  public static getInstance(): DatabaseService {
-    if (!DatabaseService.instance) {
-      DatabaseService.instance = new DatabaseService();
-    }
-    return DatabaseService.instance;
-  }
+// Log database info
+prisma.$on('info', (e) => {
+  logger.info('Database Info', {
+    message: e.message,
+    target: e.target,
+    timestamp: e.timestamp,
+  });
+});
 
-  public getClient(): PrismaClient {
-    return this.prisma;
-  }
+// Log database warnings
+prisma.$on('warn', (e) => {
+  logger.warn('Database Warning', {
+    message: e.message,
+    target: e.target,
+    timestamp: e.timestamp,
+  });
+});
 
-  private setupEventListeners(): void {
-    this.prisma.$on('query', (e) => {
-      logger.debug({
-        query: e.query,
-        params: e.params,
-        duration: e.duration,
-      }, 'Database query executed');
-    });
-
-    this.prisma.$on('error', (e) => {
-      logger.error(e, 'Database error');
-    });
-
-    this.prisma.$on('warn', (e) => {
-      logger.warn(e, 'Database warning');
-    });
-
-    this.prisma.$on('info', (e) => {
-      logger.info(e, 'Database info');
-    });
-  }
-
-  public async connect(): Promise<void> {
-    try {
-      await this.prisma.$connect();
-      logger.info('Database connected successfully');
-    } catch (error) {
-      logger.error(error, 'Failed to connect to database');
-      throw error;
-    }
-  }
-
-  public async disconnect(): Promise<void> {
-    try {
-      await this.prisma.$disconnect();
-      logger.info('Database disconnected successfully');
-    } catch (error) {
-      logger.error(error, 'Failed to disconnect from database');
-      throw error;
-    }
-  }
-
-  public async healthCheck(): Promise<boolean> {
-    try {
-      await this.prisma.$queryRaw`SELECT 1`;
-      return true;
-    } catch (error) {
-      logger.error(error, 'Database health check failed');
-      return false;
-    }
+/**
+ * Connect to the database
+ */
+export async function connectDatabase(): Promise<void> {
+  try {
+    await prisma.$connect();
+    logger.info('Database connected successfully');
+  } catch (error) {
+    logger.error('Failed to connect to database', error);
+    throw error;
   }
 }
 
-export const databaseService = DatabaseService.getInstance();
-export const prisma = databaseService.getClient();
+/**
+ * Disconnect from the database
+ */
+export async function disconnectDatabase(): Promise<void> {
+  try {
+    await prisma.$disconnect();
+    logger.info('Database disconnected successfully');
+  } catch (error) {
+    logger.error('Failed to disconnect from database', error);
+    throw error;
+  }
+}
