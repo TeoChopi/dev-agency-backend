@@ -64,3 +64,29 @@ export interface RequestMeta {
   userAgent?: string;
   ip?: string;
 }
+
+/**
+ * API client pagination parameters
+ */
+export interface ApiPaginationParams {
+  page: number;
+  limit: number;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+  search?: string;
+  category?: string;
+  minPrice?: number;
+  maxPrice?: number;
+  isActive?: boolean;
+}
+
+/**
+ * Loading states for pagination
+ */
+export enum LoadingState {
+  IDLE = 'idle',
+  LOADING = 'loading',
+  LOADING_MORE = 'loading_more',
+  SUCCESS = 'success',
+  ERROR = 'error'
+}
